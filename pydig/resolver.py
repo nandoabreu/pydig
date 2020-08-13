@@ -1,3 +1,4 @@
+import re # to parse non +short queries
 import random
 import subprocess
 import logging
@@ -15,6 +16,7 @@ class Resolver:
         nameservers=None,
         additional_args=None,
         encoding='utf-8',
+        option=None, # option: 'query_time', but defaults to short (as in `dig +short domain`)
     ):
         """
         Stores some customisable options into this resolver instance
@@ -23,6 +25,7 @@ class Resolver:
         self.nameservers = nameservers or []
         self.additional_args = additional_args or []
         self.encoding = encoding
+        self.option = option or 'short'
 
     @property
     def nameserver(self):
@@ -59,8 +62,9 @@ class Resolver:
         # Our query type
         yield query_type.name
 
-        # We only care about the result
-        yield '+short'
+        # We only care about the result, but some extra info may be provided
+        if 'query_time' in self.option: pass
+        else: yield '+short'
 
         # Add in any additional args
         yield from self.additional_args
@@ -77,4 +81,36 @@ class Resolver:
         args = list(self._args(domain, query_type))
         output = self._execute(args).decode(self.encoding).strip()
 
-        return output.split('\n') if output else []
+        res = []
+        if output:
+            if '+short' not in args:
+                # Parse the response if not a +short query
+
+                parsing = False
+                for line in output.split('\n'):
+                    if 'Query time' in line:
+                        # Set query_time to this information
+
+                        r = re.findall('.*Query time: (\d+) msec', line)
+                        try: self.query_time = int(r[0])
+                        except: self.query_time = None
+
+                    elif 'ANSWER SECTION' in line:
+                        # Start parsing after this line
+                        parsing = True
+
+                    elif parsing:
+                        if re.match(f'^{domain}', line):
+                            # Parse responses (IP address, NS)
+                            r = re.findall(f'.*IN\t+{args[-1]}\t+(.*)$', line)
+                            try: res.append(r[0])
+                            except: pass
+
+                        else:
+                            # Stop parsing
+                            parsing = False
+            else:
+                res = output.split('\n')
+
+        return res
+
